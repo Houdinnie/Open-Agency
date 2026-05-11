@@ -1,0 +1,41 @@
+{
+  "name": "atlas-backend",
+  "version": "1.0.0",
+  "description": "Atlas Backend - Agent Orchestration & Memory System",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@xai-foss/grok-api": "^1.0.0",
+    "ai": "^3.0.0",
+    "chromadb": "^1.7.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "langchain": "^0.1.0",
+    "langgraph": "^0.0.20",
+    "openai": "^4.28.0",
+    "pg": "^8.11.3",
+    "pgvector": "^0.1.8",
+    "playwright": "^1.41.0",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.0",
+    "@types/pg": "^8.10.9",
+    "@types/uuid": "^9.0.7",
+    "@types/ws": "^8.5.10",
+    "eslint": "^8.56.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
