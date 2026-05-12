@@ -1,0 +1,805 @@
+<h1 id="open-agency-technical-specification">Open Agency — Technical
+Specification</h1>
+<p><strong>Version:</strong> 1.0.0<br />
+<strong>Stack:</strong> Node.js ≥20 · TypeScript · Express · Socket.IO ·
+LangChain · ChromaDB<br />
+<strong>Runtime:</strong> Backend on port <code>3001</code>
+(configurable via <code>PORT</code> env var)</p>
+<hr />
+<h2 id="system-overview">1. System Overview</h2>
+<p>Open Agency (codenamed <strong>Atlas</strong>) is an autonomous AI
+agent orchestration platform. It runs a fleet of specialised agents that
+cooperate through a shared memory system, an event bus, and a task queue
+— all coordinated by a central orchestrator.</p>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│                    Entry: src/index.ts                   │
+│                     (Express + Socket.IO)                 │
+├──────────────┬──────────────┬──────────────┬───────────┤
+│  Slack GW    │  GitHub GW   │  Linear GW   │  Sentry   │
+├──────────────┴──────────────┴──────────────┴───────────┤
+│                  EventBus (pub/sub)                      │
+├─────────────────────────────────────────────────────────┤
+│  AgentOrchestrator  │  TaskRouter  │  Scheduler          │
+├──────────────┬──────────────┬──────────────────────────┤
+│  MemorySystem │ ReflectionLoop │ SelfHealingSystem      │
+├──────────────┴──────────────┴──────────────────────────┤
+│  CEO · Marketing · Sales · Operations · Finance          │
+│  Research · Design · Evolution · RevenueOpt · Cost       │
+│  Triage · PersonalAsst                                 │
+└─────────────────────────────────────────────────────────┘</code></pre>
+<h3 id="entry-point-srcindex.ts">1.1 Entry Point
+(<code>src/index.ts</code>)</h3>
+<ol type="1">
+<li>Creates an <code>http.Server</code> wrapping an Express app with
+Socket.IO.</li>
+<li>Initialises <code>MemorySystem</code>.</li>
+<li>Creates <code>AgentRegistry</code> and initialises all agents.</li>
+<li>Creates <code>AgentOrchestrator</code>, <code>TaskRouter</code>,
+<code>EventDispatcher</code>, <code>AutonomousScheduler</code>.</li>
+<li>Instantiates all integration gateways (Slack, GitHub, Linear,
+Sentry).</li>
+<li>Initialises autonomous loops: <code>ReflectionLoop</code>,
+<code>SelfHealingSystem</code>, <code>ResourceAllocator</code>,
+<code>RevenueOptimizationAgent</code>.</li>
+<li>Calls <code>startup()</code> which calls
+<code>.connect()</code>/<code>.start()</code> on all systems in
+parallel.</li>
+<li>Server listens on <code>PORT</code>.</li>
+</ol>
+<h3 id="configuration-srcconfig.ts">1.2 Configuration
+(<code>src/config.ts</code>)</h3>
+<p>All settings are read from environment variables (dotenv).
+Defaults:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>database<span class="op">:</span>  { host<span class="op">,</span> port<span class="op">,</span> database<span class="op">,</span> user<span class="op">,</span> password }       <span class="co">// PostgreSQL</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>llm<span class="op">:</span>       { provider<span class="op">,</span> model<span class="op">,</span> apiKey }</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>server<span class="op">:</span>    { port<span class="op">:</span> <span class="dv">3001</span><span class="op">,</span> nodeEnv<span class="op">:</span> <span class="st">&#39;development&#39;</span> }</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>frontend<span class="op">:</span>  { url<span class="op">:</span> <span class="st">&#39;http://localhost:3000&#39;</span> }</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>integrations<span class="op">:</span> { neo4j<span class="op">,</span> gmail<span class="op">,</span> hubspot<span class="op">,</span> notion }</span></code></pre></div>
+<hr />
+<h2 id="agent-system">2. Agent System</h2>
+<h3 id="base-agent-srcagentsbaseagent.ts">2.1 Base Agent
+(<code>src/agents/BaseAgent.ts</code>)</h3>
+<p>Every agent extends <code>BaseAgent</code>. Core interface:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">abstract</span> <span class="kw">class</span> BaseAgent {</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> AgentType<span class="op">;</span> status<span class="op">:</span> AgentStatus<span class="op">;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">abstract</span> <span class="fu">execute</span>(task<span class="op">:</span> Task)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>TaskResult<span class="op">&gt;;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">abstract</span> <span class="fu">canHandle</span>(task<span class="op">:</span> Task)<span class="op">:</span> <span class="dt">boolean</span><span class="op">;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">abstract</span> <span class="fu">getCapabilities</span>()<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">abstract</span> <span class="fu">getConfig</span>()<span class="op">:</span> AgentConfig<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">setStatus</span>(s<span class="op">:</span> AgentStatus)<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">initialize</span>()<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">onTaskComplete</span>(task<span class="op">:</span> Task<span class="op">,</span> result<span class="op">:</span> TaskResult)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">onTaskError</span>(task<span class="op">:</span> Task<span class="op">,</span> error<span class="op">:</span> <span class="bu">Error</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;;</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>AgentConfig</code> defaults per agent:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>{ maxConcurrentTasks<span class="op">:</span> <span class="dv">1</span>–3<span class="op">,</span> timeoutMs<span class="op">:</span> <span class="dv">30000</span>–120000<span class="op">,</span> retryAttempts<span class="op">:</span> <span class="dv">1</span>–2<span class="op">,</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  autoApprove<span class="op">:</span> <span class="dt">boolean</span><span class="op">,</span> approvalThreshold<span class="op">:</span> <span class="dv">0</span>–1000 }</span></code></pre></div>
+<h3 id="agent-registry-srcagentsagentregistry.ts">2.2 Agent Registry
+(<code>src/agents/AgentRegistry.ts</code>)</h3>
+<ul>
+<li><code>agents: Map&lt;string, BaseAgent&gt;</code> — live
+instances</li>
+<li><code>metadata: Map&lt;string, Agent&gt;</code> — lightweight
+descriptor objects</li>
+<li><code>initialize(memory)</code>: instantiates all 13 default agents
+and calls their <code>.initialize()</code></li>
+<li>Key methods: <code>get(id)</code>, <code>getAll()</code>,
+<code>getByType(type)</code>, <code>getAvailableAgents()</code>,
+<code>updateMetrics()</code>, <code>updateStatus()</code>,
+<code>getStats()</code></li>
+</ul>
+<h3 id="default-agents">2.3 Default Agents</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Agent</th>
+<th>Type</th>
+<th>Key Actions</th>
+<th>Auto-Approve</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>CEOAgent</strong></td>
+<td>orchestrator</td>
+<td><code>set_strategy</code>, <code>set_goal</code>,
+<code>analyze_performance</code>, <code>prioritize</code>,
+<code>allocate_resources</code>, <code>plan_quarter</code>,
+<code>review_operations</code></td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td><strong>MarketingAgent</strong></td>
+<td>marketing</td>
+<td><code>create-content</code>, <code>generate-campaign</code>,
+<code>analyze-seo</code>, <code>generate-hashtags</code>,
+<code>write-ad</code>, <code>create-report</code></td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td><strong>SalesAgent</strong></td>
+<td>sales</td>
+<td><code>generate-leads</code>, <code>score-leads</code>,
+<code>send-outreach</code>, <code>create-sequence</code>,
+<code>update-pipeline</code>, <code>generate-proposal</code>,
+<code>analyze-pipeline</code></td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td><strong>OperationsAgent</strong></td>
+<td>operations</td>
+<td><code>optimize</code>, <code>allocate</code>,
+<code>generate-report</code>, <code>manage-vendors</code></td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td><strong>FinanceAgent</strong></td>
+<td>finance</td>
+<td><code>track-expense</code>, <code>generate-report</code>,
+<code>analyze-budget</code>, <code>track-revenue</code>,
+<code>optimize</code></td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td><strong>ResearchAgent</strong></td>
+<td>research</td>
+<td><code>web-search</code>, <code>analyze-data</code>,
+<code>generate-report</code>, <code>track-trend</code></td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td><strong>DesignAgent</strong></td>
+<td>design</td>
+<td><code>generate-design-system</code>,
+<code>generate-component</code>, <code>generate-page</code>,
+<code>apply-brand</code>, <code>create-icon-set</code>,
+<code>generate-variations</code>, <code>audit-consistency</code></td>
+<td>Yes</td>
+</tr>
+<tr class="even">
+<td><strong>EvolutionAgent</strong></td>
+<td>orchestrator</td>
+<td><code>run-experiment</code>, <code>optimize-workflow</code>,
+<code>mutate-prompt</code>, <code>analyze-patterns</code>,
+<code>apply-learning</code>, <code>compare-strategies</code>,
+<code>generate-insights</code>, <code>evolve-threshold</code></td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td><strong>RevenueOptimizationAgent</strong></td>
+<td>finance</td>
+<td><code>manage-tiers</code>, <code>run-pricing-experiment</code>,
+<code>generate-recommendations</code>, <code>analyze-competitors</code>,
+<code>get-metrics</code></td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td><strong>CostMonitorAgent</strong></td>
+<td>operations</td>
+<td><code>track</code>, <code>getMetrics</code>, <code>setBudget</code>,
+<code>checkBudget</code>, <code>suggestOptimizations</code>,
+<code>generateReport</code></td>
+<td>Yes</td>
+</tr>
+<tr class="odd">
+<td><strong>TriageAgent</strong></td>
+<td>operations</td>
+<td><code>triage</code>, <code>configure</code>, <code>history</code>,
+<code>set-threshold</code> — subscribes to EventBus</td>
+<td>Yes</td>
+</tr>
+<tr class="even">
+<td><strong>PersonalAssistantAgent</strong></td>
+<td>personal</td>
+<td><code>schedule</code>, <code>send-email</code>,
+<code>take-note</code>, <code>remind</code>, <code>search</code>,
+<code>summarize</code>, <code>draft</code></td>
+<td>Yes</td>
+</tr>
+<tr class="odd">
+<td><strong>SelfHealingAgent</strong></td>
+<td>operations</td>
+<td>(part of <code>SelfHealingSystem</code>)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="task-types-and-routing">2.4 Task Types and Routing</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> TaskType <span class="op">=</span> <span class="st">&#39;research&#39;</span> <span class="op">|</span> <span class="st">&#39;content&#39;</span> <span class="op">|</span> <span class="st">&#39;outreach&#39;</span> <span class="op">|</span> <span class="st">&#39;analysis&#39;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>              <span class="op">|</span> <span class="st">&#39;automation&#39;</span> <span class="op">|</span> <span class="st">&#39;approval&#39;</span> <span class="op">|</span> <span class="st">&#39;learning&#39;</span> <span class="op">|</span> <span class="st">&#39;reporting&#39;</span></span></code></pre></div>
+<p><code>TaskRouter.routeToBest(task)</code> scores available agents by:
+- Type match (<code>TASK_TYPE_MAPPING</code>): <strong>+10</strong> -
+<code>idle</code> status: <strong>+5</strong> - Success rate &gt;90%:
+<strong>+3</strong> - Expected duration fit: <strong>+2</strong></p>
+<hr />
+<h2 id="memory-system-srcmemorymemorysystem.ts">3. Memory System
+(<code>src/memory/MemorySystem.ts</code>)</h2>
+<p>Two-tier storage:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Tier</th>
+<th>Criterion</th>
+<th>Storage</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Short-term</strong></td>
+<td><code>importance ≤ 0.7</code> and type ≠
+<code>preference</code></td>
+<td><code>Map&lt;string, MemoryEntry&gt;</code></td>
+</tr>
+<tr class="even">
+<td><strong>Long-term</strong></td>
+<td><code>importance &gt; 0.7</code> or type =
+<code>preference</code></td>
+<td><code>Map&lt;string, MemoryEntry&gt;</code></td>
+</tr>
+</tbody>
+</table>
+<p>Memory entry schema:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> MemoryEntry {</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> MemoryType<span class="op">;</span> content<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> embedding<span class="op">?:</span> <span class="dt">number</span>[]<span class="op">;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  metadata<span class="op">:</span> MemoryMetadata<span class="op">;</span> createdAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span> accessedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  importance<span class="op">:</span> <span class="dt">number</span><span class="op">;</span>  <span class="co">// 0.0–1.0</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  tags<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> MemoryType <span class="op">=</span> <span class="st">&#39;interaction&#39;</span> <span class="op">|</span> <span class="st">&#39;knowledge&#39;</span> <span class="op">|</span> <span class="st">&#39;preference&#39;</span> <span class="op">|</span> <span class="st">&#39;context&#39;</span> <span class="op">|</span> <span class="st">&#39;skill&#39;</span> <span class="op">|</span> <span class="st">&#39;decision&#39;</span></span></code></pre></div>
+<p>Key methods: - <code>store(entry)</code> → auto-selects short/long
+tier, returns <code>MemoryEntry</code> -
+<code>search(query, limit)</code> → keyword + tag scoring -
+<code>consolidate()</code> → promotes frequently-accessed short-term
+entries after 7 days; demotes long-term entries not accessed in 30 days
+- <code>getRecent(type?, limit)</code> → reverse-chronological slice</p>
+<hr />
+<h2 id="reflection-loop-srcmemoryreflectionloop.ts">4. Reflection Loop
+(<code>src/memory/ReflectionLoop.ts</code>)</h2>
+<p>Autonomous self-improvement cycle running every <strong>1
+hour</strong> (configurable):</p>
+<ol type="1">
+<li><strong>Collect</strong> last 100 interaction memories and last 50
+of any type.</li>
+<li><strong>Analyse</strong> success rate and average task duration from
+recent task memories.</li>
+<li><strong>Generate</strong> insights (most frequent task type, failure
+patterns, memory diversity).</li>
+<li><strong>Determine actions</strong> — if success &lt; 70%:
+<code>adjust_threshold</code> (high priority); if avg duration &gt; 5s:
+<code>refine_workflow</code> (medium); if success &gt; 90%:
+<code>create_skill</code> (low).</li>
+<li><strong>Execute</strong> high-priority actions immediately; defer
+others.</li>
+<li><strong>Store</strong> a <code>knowledge</code> memory with the
+reflection summary.</li>
+</ol>
+<p>Skills created by the loop are stored as <code>type: 'skill'</code>
+memories and can be retrieved via <code>getSkills()</code> /
+<code>useSkill(id, context)</code>.</p>
+<hr />
+<h2 id="task-orchestration">5. Task Orchestration</h2>
+<h3 id="agentorchestrator-srcorchestratoragentorchestrator.ts">5.1
+AgentOrchestrator
+(<code>src/orchestrator/AgentOrchestrator.ts</code>)</h3>
+<ul>
+<li>Maintains <code>taskQueue: Task[]</code> and
+<code>pendingTasks: Map&lt;string, TaskQueueItem&gt;</code>.</li>
+<li><code>start()</code> begins a <strong>1-second poll
+interval</strong> on <code>processQueue()</code>.</li>
+<li><code>createTask()</code> adds to queue, auto-sorts by priority then
+creation time, stores a memory entry.</li>
+<li><code>requiresApproval()</code> returns <code>true</code> when
+<code>input.spending &gt; 500</code> (USD).</li>
+<li><code>processQueue()</code> finds the first <code>pending</code>
+task whose dependencies are all <code>completed</code>, routes it via
+<code>TaskRouter</code>, and calls <code>executeTask()</code>.</li>
+<li><code>executeTask()</code> sets agent to <code>busy</code>, calls
+<code>agent.execute(task)</code>, stores result, updates metrics, calls
+<code>onTaskComplete</code> or <code>onTaskError</code>, resets agent to
+<code>active</code>.</li>
+</ul>
+<h3 id="taskrouter-srcorchestratortaskrouter.ts">5.2 TaskRouter
+(<code>src/orchestrator/TaskRouter.ts</code>)</h3>
+<p>Static mapping <code>TASK_TYPE_MAPPING</code> aligns
+<code>TaskType</code> → preferred <code>AgentType[]</code>.</p>
+<h3 id="taskgraph-srcorchestrationtaskgraph.ts">5.3 TaskGraph
+(<code>src/orchestration/taskGraph.ts</code>)</h3>
+<p>DAG structure for dependency management: -
+<code>addTask(task)</code>,
+<code>addDependency(taskId, dependsOnId)</code> -
+<code>getReadyTasks(runningIds)</code> — returns executable tasks whose
+deps are satisfied, sorted by priority -
+<code>getExecutionOrder()</code> — topological sort into execution
+levels (for parallel execution) - <code>isComplete()</code>,
+<code>hasFailures()</code></p>
+<h3 id="autonomousscheduler-srceventsautonomousscheduler.ts">5.4
+AutonomousScheduler
+(<code>src/events/AutonomousScheduler.ts</code>)</h3>
+<p>Event-driven task scheduling. Calls <code>schedule()</code> to
+register a future task, <code>cancel()</code>,
+<code>getScheduled()</code>. Used by the scheduler to enqueue tasks
+whose <code>scheduledAt</code> time has arrived.</p>
+<hr />
+<h2 id="event-bus-srceventseventbus.ts">6. Event Bus
+(<code>src/events/EventBus.ts</code>)</h2>
+<p>Node.js <code>EventEmitter</code>-based pub/sub. Core type:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> HermesEvent {</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> EventType<span class="op">;</span> source<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  payload<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  priority<span class="op">:</span> EventPriority<span class="op">;</span>       <span class="co">// &#39;low&#39; | &#39;medium&#39; | &#39;high&#39; | &#39;critical&#39;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  timestamp<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  metadata<span class="op">:</span> EventMetadata<span class="op">;</span>       <span class="co">// correlationId, traceId, tags, userId, sessionId</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> EventType <span class="op">=</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;lead_detected&#39;</span> <span class="op">|</span> <span class="st">&#39;email_received&#39;</span> <span class="op">|</span> <span class="st">&#39;price_change&#39;</span> <span class="op">|</span> <span class="st">&#39;metric_threshold&#39;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;task_completed&#39;</span> <span class="op">|</span> <span class="st">&#39;competitor_detected&#39;</span> <span class="op">|</span> <span class="st">&#39;conversion_drop&#39;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;revenue_change&#39;</span> <span class="op">|</span> <span class="st">&#39;system_error&#39;</span> <span class="op">|</span> <span class="st">&#39;scheduled_trigger&#39;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="st">&#39;slack_command&#39;</span> <span class="op">|</span> <span class="st">&#39;api_webhook&#39;</span></span></code></pre></div>
+<p>Subscription modes: - <code>subscribe(eventType, handler)</code> —
+specific event type - <code>subscribeToAll(handler)</code> — all events
+(<code>'*'</code>)</p>
+<p>EventDispatcher (<code>src/events/EventDispatcher.ts</code>)
+dispatches incoming events to appropriate agents based on event
+type.</p>
+<hr />
+<h2 id="core-services">7. Core Services</h2>
+<h3 id="llmservice-srcservicesllmservice.ts">7.1 LLMService
+(<code>src/services/LLMService.ts</code>)</h3>
+<p>Wrapper around OpenAI / Anthropic / Grok. Interface:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> LLMResponse { content<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> raw<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span> }</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">complete</span>(prompt<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> opts<span class="op">?:</span> { system<span class="op">?:</span> <span class="dt">string</span> })<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>LLMResponse<span class="op">&gt;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="fu">completeWithContext</span>(prompt<span class="op">:</span> <span class="dt">string</span><span class="op">,</span> context<span class="op">:</span> <span class="dt">string</span>)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>LLMResponse<span class="op">&gt;</span></span></code></pre></div>
+<p>Uses the provider and API key from <code>config.llm</code>.</p>
+<h3 id="selfhealingsystem-srcservicesselfhealingsystem.ts">7.2
+SelfHealingSystem (<code>src/services/SelfHealingSystem.ts</code>)</h3>
+<ul>
+<li><strong>Health checks</strong> every <strong>30 seconds</strong>:
+agent health, memory health, system resources, task queue.</li>
+<li><strong>Backup</strong> every <strong>1 hour</strong>: full,
+memory-only, or config-only snapshots stored in a rolling buffer of
+24.</li>
+<li><code>getHealthStatus()</code> returns overall
+<code>'healthy' | 'degraded' | 'unhealthy'</code>.</li>
+<li><code>attemptRecovery(component)</code>: resets error-state agents
+to <code>idle</code>; triggers memory consolidation.</li>
+<li>Backup checksum via simple hash; restore validates checksum before
+applying.</li>
+</ul>
+<h3 id="resourceallocator-srcservicesresourceallocator.ts">7.3
+ResourceAllocator (<code>src/services/ResourceAllocator.ts</code>)</h3>
+<p>Tracks CPU and memory utilisation. Key methods: -
+<code>getResourceUtilization()</code> → current
+<code>{ cpu: number, memory: number }</code> -
+<code>optimizeResourceAllocation()</code> → returns reallocation
+recommendations - <code>enableLowCostMode(enabled)</code> → toggles
+power-saving profile - <code>setResourceCap(cpu, memory)</code> → hard
+caps</p>
+<h3 id="monetizationengine-srcservicesmonetizationengine.ts">7.4
+MonetizationEngine
+(<code>src/services/MonetizationEngine.ts</code>)</h3>
+<p>Tracks revenue streams, clients, campaigns. Key outputs: -
+<code>getFinancialMetrics()</code> →
+<code>{ totalRevenue, totalCosts, netProfit, profitMargin, mrr, arr, churnRate, ltv, cac }</code>
+- <code>projectRevenue(months)</code> → MRR projection with 15% monthly
+growth assumption - <code>trackRevenue(streamId, amount)</code>,
+<code>trackCost(streamId, amount)</code></p>
+<hr />
+<h2 id="autonomous-engines">8. Autonomous Engines</h2>
+<h3
+id="autonomouscontentengine-srcservicesautonomouscontentengine.ts">8.1
+AutonomousContentEngine
+(<code>src/services/AutonomousContentEngine.ts</code>)</h3>
+<ul>
+<li>Manages <code>contentPieces</code>, <code>campaigns</code>,
+<code>seoCampaigns</code>.</li>
+<li>Actions: <code>create-content</code>, <code>schedule-content</code>,
+<code>publish-content</code>, <code>analyze-content</code>,
+<code>generate-campaign</code>, <code>create-seo-campaign</code>,
+<code>get-analytics</code>.</li>
+<li>Content pieces have status:
+<code>draft | scheduled | published | archived</code>.</li>
+<li>SEO campaigns track keyword rankings over time.</li>
+</ul>
+<h3
+id="autonomousoutreachengine-srcservicesautonomousoutreachengine.ts">8.2
+AutonomousOutreachEngine
+(<code>src/services/AutonomousOutreachEngine.ts</code>)</h3>
+<ul>
+<li>Manages <code>leads</code>, <code>sequences</code>,
+<code>campaigns</code>.</li>
+<li><code>scrapeLeads(source, criteria)</code> → generates mock B2B
+leads using LLM.</li>
+<li><code>enrichLead(leadId)</code> → appends notes and bumps score by
+up to 10 points.</li>
+<li><code>sendOutreach(leadId, sequenceId)</code> → personalises
+template variables (<code>{{name}}</code>, <code>{{company}}</code>,
+etc.) and sends via email or LinkedIn.</li>
+<li>Sequences are step-by-step multi-channel
+(email/LinkedIn/Twitter/cold-call) drip campaigns.</li>
+</ul>
+<hr />
+<h2 id="integrations">9. Integrations</h2>
+<h3 id="slackgateway-srcintegrationsslackgateway.ts">9.1 SlackGateway
+(<code>src/integrations/SlackGateway.ts</code>)</h3>
+<ul>
+<li><code>connect()</code> / <code>disconnect()</code> — mock mode when
+env vars not set.</li>
+<li><code>handleCommand(command)</code> processes slash commands:</li>
+</ul>
+<table>
+<thead>
+<tr class="header">
+<th>Command</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>status</code></td>
+<td>System status block</td>
+</tr>
+<tr class="even">
+<td><code>agents</code></td>
+<td>Agent list block</td>
+</tr>
+<tr class="odd">
+<td><code>leads</code></td>
+<td>Fetches leads</td>
+</tr>
+<tr class="even">
+<td><code>run &lt;agent&gt; &lt;task&gt;</code></td>
+<td>Publishes <code>slack_command</code> event</td>
+</tr>
+<tr class="odd">
+<td><code>pause &lt;agent&gt;</code></td>
+<td>Pauses agent</td>
+</tr>
+<tr class="even">
+<td><code>approve &lt;task&gt;</code></td>
+<td>Approves task</td>
+</tr>
+<tr class="odd">
+<td><code>help</code></td>
+<td>Lists commands</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>handleSystemEvent(event)</code> sends Slack alerts for:
+<code>conversion_drop</code>, <code>revenue_change</code>,
+<code>competitor_detected</code>, <code>system_error</code>.</li>
+</ul>
+<h3 id="githubintegration-srcintegrationsgithubintegration.ts">9.2
+GitHubIntegration
+(<code>src/integrations/GitHubIntegration.ts</code>)</h3>
+<ul>
+<li><code>createPullRequest({ title, body, head, base })</code> →
+returns <code>GitHubPullRequest</code> with mock CI checks (CI Test,
+Lint, Type Check).</li>
+<li><code>updatePRStatus()</code>, <code>addReview()</code>,
+<code>updateCheck()</code>, <code>mergePullRequest()</code>.</li>
+<li><code>getStats()</code> → open PRs, merged PRs, pending reviews,
+failed checks.</li>
+<li>Uses <code>GITHUB_TOKEN</code>, <code>GITHUB_OWNER</code>,
+<code>GITHUB_REPO</code> env vars.</li>
+</ul>
+<h3 id="linearintegration-srcintegrationslinearintegration.ts">9.3
+LinearIntegration
+(<code>src/integrations/LinearIntegration.ts</code>)</h3>
+<ul>
+<li><code>createIssue({ title, description, priority, projectId, labels })</code>
+→ returns <code>LinearIssue</code>.</li>
+<li><code>updateIssue()</code>, <code>assignIssue()</code>,
+<code>addComment()</code>, <code>closeIssue()</code>.</li>
+<li>Default projects: <code>hermes-ops</code>, <code>hermes-bugs</code>,
+<code>hermes-features</code>.</li>
+<li>Priority: <code>0</code> = urgent, <code>1</code> = high,
+<code>2</code> = medium, <code>3</code> = low.</li>
+<li>Uses <code>LINEAR_API_KEY</code>, <code>LINEAR_WORKSPACE</code> env
+vars.</li>
+</ul>
+<h3 id="sentryintegration-srcintegrationssentryintegration.ts">9.4
+SentryIntegration
+(<code>src/integrations/SentryIntegration.ts</code>)</h3>
+<ul>
+<li>Maintains in-memory
+<code>issues: Map&lt;string, SentryIssue&gt;</code>.</li>
+<li><code>createIssue()</code>, <code>resolveIssue()</code>,
+<code>ignoreIssue()</code>, <code>getAlertStats()</code>.</li>
+<li><code>setAlertThreshold(level, count, windowMs)</code> for custom
+alert rules.</li>
+<li>Mock mode by default; real SDK wired via
+<code>src/instrument.ts</code>.</li>
+</ul>
+<hr />
+<h2 id="tool-system-srctoolstoolregistry.ts">10. Tool System
+(<code>src/tools/ToolRegistry.ts</code>)</h2>
+<p>Abstract base class <code>BaseTool</code> with:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">abstract</span> <span class="kw">class</span> BaseTool {</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> category<span class="op">:</span> ToolCategory<span class="op">;</span> description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  actions<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> (input) <span class="kw">=&gt;</span> <span class="bu">Promise</span><span class="op">&lt;</span>ToolResult<span class="op">&gt;&gt;;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">abstract</span> <span class="fu">registerActions</span>()<span class="op">:</span> <span class="dt">void</span><span class="op">;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">async</span> <span class="fu">execute</span>(action<span class="op">,</span> input)<span class="op">:</span> <span class="bu">Promise</span><span class="op">&lt;</span>ToolResult<span class="op">&gt;;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">getToolDefinition</span>()<span class="op">:</span> Tool<span class="op">;</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p><code>ToolRegistry</code> holds all registered tools. Tools are
+grouped by category: <code>communication</code>,
+<code>productivity</code>, <code>data</code>, <code>automation</code>,
+<code>scraping</code>, <code>analytics</code>.</p>
+<hr />
+<h2 id="design-system-srcdesign">11. Design System
+(<code>src/design/</code>)</h2>
+<h3 id="creativedirectoragent-srcdesigncreativedirectoragent.ts">11.1
+CreativeDirectorAgent
+(<code>src/design/CreativeDirectorAgent.ts</code>)</h3>
+<p>Orchestrates the design pipeline: <code>brief</code>,
+<code>generate-concepts</code>, <code>refine-concept</code>,
+<code>produce-designs</code>, <code>review-designs</code>.</p>
+<h3 id="designdnasystem-srcdesigndesigndnasystem.ts">11.2
+DesignDNASystem (<code>src/design/DesignDNASystem.ts</code>)</h3>
+<p>Manages brand design tokens: - <strong>Colors</strong> — primary,
+secondary, success, warning, error, background, surface, text -
+<strong>Typography</strong> — font families, sizes, weights,
+line-heights - <strong>Spacing</strong> — xs through xl (4px–48px) -
+<strong>Border radius</strong> — sm through xl -
+<strong>Shadows</strong> — sm through xl</p>
+<h3 id="visualreasoningengine-srcdesignvisualreasoningengine.ts">11.3
+VisualReasoningEngine
+(<code>src/design/VisualReasoningEngine.ts</code>)</h3>
+<p>Analyses visual concepts: <code>analyze-image</code>,
+<code>generate-variations</code>, <code>assess-accessibility</code>,
+<code>extract-colors</code>.</p>
+<hr />
+<h2 id="api-routes">12. API Routes</h2>
+<p>All routes are registered on the Express app in
+<code>src/index.ts</code>:</p>
+<h3 id="getpost-apiagents"><code>GET/POST /api/agents</code></h3>
+<ul>
+<li><code>GET /</code> → all agents from registry</li>
+<li><code>GET /stats</code> → registry stats</li>
+<li><code>GET /:id</code> → single agent metadata</li>
+<li><code>POST /:id/start</code> → initialize agent</li>
+<li><code>POST /:id/stop</code> → set agent to idle</li>
+</ul>
+<h3 id="getpost-apitasks"><code>GET/POST /api/tasks</code></h3>
+<ul>
+<li><code>POST /create</code> →
+<code>orchestrator.createTask()</code></li>
+<li><code>GET /</code> → all tasks (optional <code>?status=</code>
+filter)</li>
+<li><code>GET /:id</code> → single task</li>
+<li><code>POST /:id/cancel</code> → cancel task</li>
+</ul>
+<h3 id="getpost-apimemory"><code>GET/POST /api/memory</code></h3>
+<ul>
+<li><code>POST /store</code> → <code>memory.store()</code></li>
+<li><code>GET /search?q=</code> → <code>memory.search()</code></li>
+<li><code>GET /recent?type=&amp;limit=</code> →
+<code>memory.getRecent()</code></li>
+<li><code>POST /consolidate</code> →
+<code>memory.consolidate()</code></li>
+</ul>
+<h3 id="getpost-apisystem"><code>GET/POST /api/system</code></h3>
+<ul>
+<li><code>GET /health</code> → self-healing health status</li>
+<li><code>GET /snapshot</code> → full system snapshot</li>
+<li><code>POST /backup?type=</code> → create backup</li>
+<li><code>GET /backups</code> → list backups</li>
+<li><code>POST /restore/:id</code> → restore from backup</li>
+<li><code>POST /recover/:component</code> → trigger recovery</li>
+<li><code>GET /cost/metrics</code>, <code>/cost/budget</code>,
+<code>/cost/optimize</code>, <code>/cost/report</code></li>
+<li><code>POST /cost/track</code>, <code>/cost/budget</code></li>
+<li><code>GET /reflection</code>, <code>/reflection/skills</code></li>
+<li><code>POST /reflection/trigger</code></li>
+<li><code>GET /resources</code>, <code>/resources/optimize</code></li>
+<li><code>POST /resources/low-cost</code>,
+<code>/resources/cap</code></li>
+</ul>
+<h3 id="getpost-apipricing"><code>GET/POST /api/pricing</code></h3>
+<ul>
+<li><code>GET /tiers</code> → all pricing tiers</li>
+<li><code>POST /tiers</code> → create tier</li>
+<li><code>GET /recommendations</code> → price recommendations</li>
+<li><code>POST /experiments</code> → create pricing experiment</li>
+<li><code>GET /competitors</code> → competitor analysis</li>
+</ul>
+<h3
+id="getpost-apimonetization"><code>GET/POST /api/monetization</code></h3>
+<ul>
+<li><code>GET /metrics</code> → financial metrics</li>
+<li><code>GET /streams</code> → revenue streams</li>
+<li><code>GET /clients</code> → client list</li>
+<li><code>POST /clients</code> → add client</li>
+<li><code>GET /campaigns</code> → ad/content campaigns</li>
+<li><code>POST /campaigns</code> → create campaign</li>
+</ul>
+<h3 id="socket.io-events">Socket.IO Events</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Event</th>
+<th>Direction</th>
+<th>Payload</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>agent:update</code></td>
+<td>server→client</td>
+<td><code>{ agentId, status, metrics }</code></td>
+</tr>
+<tr class="even">
+<td><code>task:update</code></td>
+<td>server→client</td>
+<td><code>{ taskId, status }</code></td>
+</tr>
+<tr class="odd">
+<td><code>event:published</code></td>
+<td>server→client</td>
+<td><code>HermesEvent</code></td>
+</tr>
+<tr class="even">
+<td><code>task:submit</code></td>
+<td>client→server</td>
+<td><code>{ title, description, type, priority, input }</code></td>
+</tr>
+<tr class="odd">
+<td><code>agent:command</code></td>
+<td>client→server</td>
+<td><code>{ agentId, command, args }</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="security">13. Security</h2>
+<h3 id="toolregistry-srcsecuritytoolregistry.ts">13.1 ToolRegistry
+(<code>src/security/toolRegistry.ts</code>)</h3>
+<p>Central registry of all tools available to agents. Each tool has an
+<code>id</code>, <code>name</code>, <code>category</code>,
+<code>description</code>, and list of <code>actions</code>.</p>
+<h3 id="securitypolicyengine-srcsecuritypolicyengine.ts">13.2
+SecurityPolicyEngine (<code>src/security/policyEngine.ts</code>)</h3>
+<p>Evaluates security policies for tool execution. Provides: -
+<code>evaluateToolAccess(agent, tool)</code> →
+<code>allow | deny | require_approval</code> -
+<code>evaluateDataAccess(agent, resource)</code> → access level -
+<code>auditTrail</code>: records all security decisions</p>
+<h3 id="policies-srcsecuritypolicies.ts">13.3 Policies
+(<code>src/security/policies.ts</code>)</h3>
+<p>Policy definitions with <code>resource</code>, <code>action</code>,
+<code>effect</code> (allow/deny), conditions.</p>
+<h3 id="escalation-srcsecurityescalation.ts">13.4 Escalation
+(<code>src/security/escalation.ts</code>)</h3>
+<p>Handles security escalations. <code>escalate(event)</code> → creates
+approval request, notifies security officer, can auto-revoke if
+critical.</p>
+<h3 id="types-srcsecuritytypes.ts">13.5 Types
+(<code>src/security/types.ts</code>)</h3>
+<p>Core types: <code>SecurityPolicy</code>, <code>ToolPermission</code>,
+<code>DataAccessLevel</code>, <code>EscalationEvent</code>,
+<code>AuditEntry</code>.</p>
+<hr />
+<h2 id="data-models-key-interfaces">14. Data Models (Key
+Interfaces)</h2>
+<h3 id="task">Task</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> Task {</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> TaskType<span class="op">;</span> priority<span class="op">:</span> TaskPriority<span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  status<span class="op">:</span> TaskStatus<span class="op">;</span> title<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  assignedTo<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span> dependencies<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  input<span class="op">:</span> <span class="bu">Record</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> <span class="dt">unknown</span><span class="op">&gt;;</span> output<span class="op">?:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  result<span class="op">?:</span> TaskResult<span class="op">;</span> createdAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span> startedAt<span class="op">?:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  completedAt<span class="op">?:</span> <span class="bu">Date</span><span class="op">;</span> error<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span> metadata<span class="op">:</span> TaskMetadata<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="agent">Agent</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> Agent {</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> AgentType<span class="op">;</span> status<span class="op">:</span> AgentStatus<span class="op">;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  capabilities<span class="op">:</span> <span class="dt">string</span>[]<span class="op">;</span> config<span class="op">:</span> AgentConfig<span class="op">;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  createdAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span> lastActiveAt<span class="op">?:</span> <span class="bu">Date</span><span class="op">;</span> metrics<span class="op">:</span> AgentMetrics<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="userprofile">UserProfile</h3>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> UserProfile {</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> name<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> email<span class="op">:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  preferences<span class="op">:</span> UserPreferences<span class="op">;</span>          <span class="co">// communicationStyle, notificationPreferences, defaultAgents, approvalThresholds</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  businessContext<span class="op">:</span> BusinessContext<span class="op">;</span>      <span class="co">// industry, businessType, currentTools, teamSize, painPoints</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  goals<span class="op">:</span> Goal[]<span class="op">;</span>                         <span class="co">// id, title, description, targetDate, progress, status</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>  createdAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span> updatedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<h3 id="approvalrequest">ApprovalRequest</h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> ApprovalRequest {</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  id<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> taskId<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> type<span class="op">:</span> ApprovalType<span class="op">;</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  title<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> description<span class="op">:</span> <span class="dt">string</span><span class="op">;</span> details<span class="op">:</span> <span class="dt">unknown</span><span class="op">;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  requestedAt<span class="op">:</span> <span class="bu">Date</span><span class="op">;</span> status<span class="op">:</span> ApprovalStatus<span class="op">;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  resolvedAt<span class="op">?:</span> <span class="bu">Date</span><span class="op">;</span> resolution<span class="op">?:</span> <span class="dt">string</span><span class="op">;</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ApprovalType <span class="op">=</span> <span class="st">&#39;spending&#39;</span> <span class="op">|</span> <span class="st">&#39;commitment&#39;</span> <span class="op">|</span> <span class="st">&#39;content&#39;</span> <span class="op">|</span> <span class="st">&#39;custom&#39;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> ApprovalStatus <span class="op">=</span> <span class="st">&#39;pending&#39;</span> <span class="op">|</span> <span class="st">&#39;approved&#39;</span> <span class="op">|</span> <span class="st">&#39;rejected&#39;</span> <span class="op">|</span> <span class="st">&#39;expired&#39;</span></span></code></pre></div>
+<hr />
+<h2 id="environment-variables">15. Environment Variables</h2>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Database</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="va">DB_HOST</span><span class="op">=</span>localhost<span class="kw">;</span> <span class="va">DB_PORT</span><span class="op">=</span>5432<span class="kw">;</span> <span class="va">DB_NAME</span><span class="op">=</span>open_agency<span class="kw">;</span> <span class="va">DB_USER</span><span class="op">=</span>postgres<span class="kw">;</span> <span class="va">DB_PASSWORD</span><span class="op">=</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="co"># LLM</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="va">LLM_PROVIDER</span><span class="op">=</span>openai              <span class="co"># openai | anthropic | grok</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="va">LLM_MODEL</span><span class="op">=</span>gpt-4-turbo-preview</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="va">OPENAI_API_KEY</span><span class="op">=</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="va">ANTHROPIC_API_KEY</span><span class="op">=</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Server</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="va">PORT</span><span class="op">=</span>3001</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="va">NODE_ENV</span><span class="op">=</span>development</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="va">FRONTEND_URL</span><span class="op">=</span>http://localhost:3000</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="co"># Integrations</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="va">NEO4J_USER</span><span class="op">=</span>neo4j<span class="kw">;</span> <span class="va">NEO4J_PASSWORD</span><span class="op">=</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="va">GMAIL_CLIENT_ID</span><span class="op">=</span><span class="kw">;</span> <span class="va">GMAIL_CLIENT_SECRET</span><span class="op">=</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a><span class="va">HUBSPOT_API_KEY</span><span class="op">=</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a><span class="va">NOTION_API_KEY</span><span class="op">=</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a><span class="va">GITHUB_TOKEN</span><span class="op">=</span><span class="kw">;</span> <span class="va">GITHUB_OWNER</span><span class="op">=</span><span class="kw">;</span> <span class="va">GITHUB_REPO</span><span class="op">=</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="va">LINEAR_API_KEY</span><span class="op">=</span><span class="kw">;</span> <span class="va">LINEAR_WORKSPACE</span><span class="op">=</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a><span class="co"># Observability</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a><span class="va">SENTRY_DSN</span><span class="op">=</span>https://...@o4511369441574912.ingest.us.sentry.io/4511370553327616</span></code></pre></div>
+<hr />
+<h2 id="running-the-system">16. Running the System</h2>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Backend</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> src/backend</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> install          <span class="co"># installs @sentry/node, express, socket.io, langchain, chromadb, etc.</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> run dev          <span class="co"># tsx watch src/index.ts  (development)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> run build <span class="kw">&amp;&amp;</span> <span class="ex">npm</span> start   <span class="co"># production</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Frontend (Next.js)</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> src/frontend</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> install</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> run dev</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="co"># Docker</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose up    <span class="co"># uses docker/Dockerfile and docker-compose.yml</span></span></code></pre></div>
+<hr />
+<h2 id="sentry-integration">17. Sentry Integration</h2>
+<p>Sentry is initialized in <code>src/instrument.ts</code>
+<strong>before</strong> any other module:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> <span class="op">*</span> <span class="im">as</span> Sentry <span class="im">from</span> <span class="st">&quot;@sentry/node&quot;</span><span class="op">;</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>Sentry<span class="op">.</span><span class="fu">init</span>({</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  dsn<span class="op">:</span> <span class="bu">process</span><span class="op">.</span><span class="at">env</span><span class="op">.</span><span class="at">SENTRY_DSN</span><span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  sendDefaultPii<span class="op">:</span> <span class="kw">true</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>})<span class="op">;</span></span></code></pre></div>
+<p><code>src/index.ts</code> imports <code>./instrument.js</code> as its
+<strong>first line</strong> (before <code>dotenv/config</code>),
+ensuring all unhandled errors and performance traces are captured from
+startup.</p>
+<hr />
+<p><em>This specification is derived from the source code at
+<code>src/backend/src/</code> and reflects the complete implementation
+as of commit <code>2427ac9</code>.</em></p>
