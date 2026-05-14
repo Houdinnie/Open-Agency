@@ -30,29 +30,17 @@ An autonomous AI agent for trading, built with multi-agent orchestration, sandbo
 Comprehensive AI agent platform with skills, workflows, and dashboard — the parent repo powering autonomous operations.
 > *TypeScript · Node.js · Skills Framework · Dashboard*
 
-#### **3. GenX** — Automated Trading Dashboard for Deriv
-Advanced trading dashboard for Deriv with APA analysis, real-time market data, and intelligent trade execution.
-> *Python · Real-time Data · Trading API · Technical Analysis*
-
-#### **4. SwarmSea** — OS AI Assistant
+#### **3. SwarmSea** — OS AI Assistant
 Your OS AI — an intelligent desktop assistant integrated into the operating system layer.
 > *AI · OS Integration · Desktop Assistant*
 
-#### **5. mantra** — AI-Powered Productivity Hub
+#### **4. mantra** — AI-Powered Productivity Hub
 Consolidated AI tools platform featuring brain, channels, notes, tasks, and sandbox execution in one unified interface.
 > *React · TypeScript · AI Integration · Tool Router*
 
-#### **6. nomad-flow** — Workflow Automation Platform
+#### **5. nomad-flow** — Workflow Automation Platform
 Automate and orchestrate workflows across multiple services and AI agents.
 > *Automation · Workflow Engine · Multi-service Integration*
-
-#### **7. VentureMind** — AI Business Strategy Advisor
-AI-powered business planning and strategy formulation tool for founders and entrepreneurs.
-> *AI · Business Planning · Strategy · LLM*
-
-#### **8. VentureMind-Global-Founder** — Global Founder Platform
-Resources and tools for entrepreneurs and solo founders building globally.
-> *Entrepreneurship · Global Business · Founder Tools*
 
 ### 📬 Connect with Me
 
