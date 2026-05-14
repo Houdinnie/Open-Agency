@@ -22,61 +22,37 @@ I have completed several intensive job simulations with global leaders to refine
 
 ### 🏗️ Featured Ventures & Projects
 
-#### **1. Trinity-AI** — AI-Powered Forex Trading Decision Support
-Real-time forex trading scanner with broker integration, TradingView webhook signals, and AI-driven signal analysis.
-> *Python · FastAPI · React · TradingView Webhooks · Broker APIs*
-
-#### **2. Devora** — Autonomous AI Trading Agent
+#### **1. Devora** — Autonomous AI Trading Agent
 An autonomous AI agent for trading, built with multi-agent orchestration, sandbox execution, and real broker connectivity.
 > *TypeScript · Docker · LLM Config · Agent Framework*
 
-#### **3. Open-Agency** — Open-Source AI Agency Framework
-Comprehensive AI agent platform with skills, workflows, and dashboard — the parent repo powering my autonomous operations.
+#### **2. Open-Agency** — Open-Source AI Agency Framework
+Comprehensive AI agent platform with skills, workflows, and dashboard — the parent repo powering autonomous operations.
 > *TypeScript · Node.js · Skills Framework · Dashboard*
 
-#### **4. GenX** — Automated Trading Dashboard for Deriv
+#### **3. GenX** — Automated Trading Dashboard for Deriv
 Advanced trading dashboard for Deriv with APA analysis, real-time market data, and intelligent trade execution.
 > *Python · Real-time Data · Trading API · Technical Analysis*
 
-#### **5. fx-terminal** — AI Forex Chart Analyser
-AI-powered forex chart analyser grounded in price-action playbooks — analyses charts and suggests setups.
-> *Python · AI · Chart Analysis · Price Action*
-
-#### **6. SwarmSea** — OS AI Assistant
+#### **4. SwarmSea** — OS AI Assistant
 Your OS AI — an intelligent desktop assistant integrated into the operating system layer.
 > *AI · OS Integration · Desktop Assistant*
 
-#### **7. mantra** — AI-Powered Productivity Hub
+#### **5. mantra** — AI-Powered Productivity Hub
 Consolidated AI tools platform featuring brain, channels, notes, tasks, and sandbox execution in one unified interface.
 > *React · TypeScript · AI Integration · Tool Router*
 
-#### **8. Kronos** — Quantitative Trading System
-A systematic, data-driven approach to market analysis and trade execution.
-> *Python · Quantitative Analysis · Trading Algorithms*
-
-#### **9. nomad-flow** — Workflow Automation Platform
+#### **6. nomad-flow** — Workflow Automation Platform
 Automate and orchestrate workflows across multiple services and AI agents.
 > *Automation · Workflow Engine · Multi-service Integration*
 
-#### **10. timesfm** — Time Series Forecasting Model
-Google's Time Series Forecasting Machine adapted for financial prediction tasks.
-> *Python · PyTorch · Time Series · Forecasting*
-
-#### **11. VentureMind** — AI Business Strategy Advisor
+#### **7. VentureMind** — AI Business Strategy Advisor
 AI-powered business planning and strategy formulation tool for founders and entrepreneurs.
 > *AI · Business Planning · Strategy · LLM*
 
-#### **12. Trinity-AI (Graduation Project)** — Intelligent Edge-Fintech Dashboard
-A synthesis of FinTech and Embedded Systems featuring Kafka real-time market data, PyTorch LSTM predictions, and ESP32 physical ticker.
-> *Python · Kafka · PyTorch · ESP32 · Modbus TCP*
-
-#### **13. Smart Water Tank (PLC/SCADA)**
-Automated pump control via OpenPLC with Python-based SCADA interface using Modbus TCP.
-> *Ladder Logic · OpenPLC · Modbus TCP · Python*
-
-#### **14. fx-terminal** — Real-Time Trading Dashboard
-Visualised market data and technical indicators using Python APIs for live trading.
-> *Python · REST APIs · Technical Indicators · Real-time Data*
+#### **8. VentureMind-Global-Founder** — Global Founder Platform
+Resources and tools for entrepreneurs and solo founders building globally.
+> *Entrepreneurship · Global Business · Founder Tools*
 
 ### 📬 Connect with Me
 
