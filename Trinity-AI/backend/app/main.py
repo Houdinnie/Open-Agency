@@ -19,9 +19,7 @@ broker_manager = BrokerManager()
 async def lifespan(app: FastAPI):
     print("[Trinity AI] Starting backend services...")
     await broker_manager.connect_all()
-    print(f"[Trinity AI] Connected to Exness: {broker_manager.exness.connected}")
-    print(f"[Trinity AI] Connected to deriv.com: {broker_manager.deriv.connected}")
-    print("[Trinity AI] Backend ready on port 8000")
+    print(f"[Trinity AI] Exness: {broker_manager.exness.connected} | deriv.com: {broker_manager.deriv.connected}")
     app.state.broker_manager = broker_manager
     yield
     print("[Trinity AI] Shutting down...")
@@ -31,7 +29,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Trinity AI Backend",
     version="0.1.0",
-    description="Multi-strategy forex trading signal generator",
+    description="Multi-strategy forex trading signal generator + real trading execution",
     lifespan=lifespan,
 )
 

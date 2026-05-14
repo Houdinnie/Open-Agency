@@ -1,8 +1,9 @@
 """
-Trading API — real-time trade execution via deriv.com MCP tools.
+Trading API — real-time trade execution via deriv.com WebSocket.
 POST /api/trading/proposal  → price a contract
 POST /api/trading/execute   → place a trade
 POST /api/trading/close    → close a position
+GET  /api/trading/candles/:symbol → OHLC + APA structure summary
 """
 from pydantic import BaseModel
 from fastapi import APIRouter, Request
@@ -11,9 +12,9 @@ router = APIRouter(prefix="/trading", tags=["trading"])
 
 
 class ProposalRequest(BaseModel):
-    symbol: str          # e.g. "R_50"
-    contract_type: str   # MULTUP | MULTDOWN | CALL | PUT
-    amount: float        # stake in USD
+    symbol: str
+    contract_type: str  # MULTUP | MULTDOWN | CALL | PUT
+    amount: float
     multiplier: int = 100
 
 
@@ -32,13 +33,8 @@ class CloseRequest(BaseModel):
 
 @router.post("/proposal")
 async def get_proposal(req: ProposalRequest, request: Request):
-    broker_manager = request.app.state.broker_manager
-    result = await broker_manager.get_proposal(
-        symbol=req.symbol,
-        contract_type=req.contract_type,
-        amount=req.amount,
-        multiplier=req.multiplier,
-    )
+    bm = request.app.state.broker_manager
+    result = await bm.get_proposal(req.symbol, req.contract_type, req.amount, req.multiplier)
     if "error" in result:
         return {"success": False, "error": result["error"]}
     return {"success": True, "proposal": result}
@@ -46,14 +42,10 @@ async def get_proposal(req: ProposalRequest, request: Request):
 
 @router.post("/execute")
 async def execute_trade(req: ExecuteRequest, request: Request):
-    broker_manager = request.app.state.broker_manager
-    result = await broker_manager.place_trade(
-        symbol=req.symbol,
-        contract_type=req.contract_type,
-        amount=req.amount,
-        multiplier=req.multiplier,
-        stop_loss=req.stop_loss,
-        take_profit=req.take_profit,
+    bm = request.app.state.broker_manager
+    result = await bm.place_trade(
+        req.symbol, req.contract_type, req.amount, req.multiplier,
+        req.stop_loss, req.take_profit
     )
     if "error" in result:
         return {"success": False, "error": result["error"]}
@@ -62,20 +54,19 @@ async def execute_trade(req: ExecuteRequest, request: Request):
 
 @router.post("/close")
 async def close_trade(req: CloseRequest, request: Request):
-    broker_manager = request.app.state.broker_manager
-    result = await broker_manager.close_trade(contract_id=req.contract_id)
+    bm = request.app.state.broker_manager
+    result = await bm.close_trade(contract_id=req.contract_id)
     if "error" in result:
         return {"success": False, "error": result["error"]}
     return {"success": True, "result": result}
 
 
-@router.get("/candles/:symbol")
-async def get_candles(symbol: str, timeframe: str = "M5",
-                      count: int = 100, request: Request = None):
-    broker_manager = request.app.state.broker_manager
-    candles = await broker_manager.get_candles(symbol, timeframe, count)
+@router.get("/candles/{symbol}")
+async def get_candles(symbol: str, timeframe: str = "M5", count: int = 100,
+                      request: Request = None):
+    bm = request.app.state.broker_manager
+    candles = await bm.get_candles(symbol, timeframe, count)
 
-    # Add structure summary
     if candles and len(candles) > 0:
         closes = [c["close"] for c in candles]
         highs = [c["high"] for c in candles]

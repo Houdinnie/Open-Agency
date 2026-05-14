@@ -1,11 +1,13 @@
 """
-Deriv.com WebSocket broker — replaces mock in Trinity-AI backend.
-Implements the same interface as the mock but connects to the real Deriv API.
+deriv.com Broker — WebSocket API via native websockets library.
+Handles real-time quotes, account data, and order execution.
+Falls back to mock data when no API token is configured.
 """
+
 import asyncio
 import json
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import random
 import time
 
@@ -16,8 +18,8 @@ except ImportError:
     HAS_WS = False
 
 
-class RealDerivBroker:
-    """Production Deriv.com WebSocket client."""
+class DerivBroker:
+    """Production Deriv.com WebSocket client using native websockets."""
 
     WS_URL = "wss://ws.binaryws.com/websockets/v3"
 
@@ -30,43 +32,39 @@ class RealDerivBroker:
         self._req_id = 1
         self._pending: Dict[int, asyncio.Future] = {}
         self._listener_task = None
+        self._use_mock = True
 
     async def connect(self):
-        """Connect and authorize with Deriv WebSocket API."""
         self._token = os.getenv("DERIV_API_TOKEN", "")
         self._app_id = os.getenv("DERIV_APP_ID", "1089")
 
         if not self._token:
-            print("[deriv] No API token — falling back to mock mode")
-            return await self._mock_connect()
+            print("[deriv] No API token — running in mock mode")
+            self._use_mock = True
+            self.connected = True
+            return
 
         try:
-            self._ws = await websockets.connect(
-                f"{self.WS_URL}?app_id={self._app_id}"
-            )
-            # Authorize
+            self._ws = await websockets.connect(f"{self.WS_URL}?app_id={self._app_id}")
             result = await self._send({"authorize": self._token})
             if "error" in result:
-                print(f"[deriv] Authorization failed: {result['error']} — using mock")
+                print(f"[deriv] Auth failed: {result['error']} — mock mode")
                 await self._mock_connect()
                 return
             self._authorized = True
+            self._use_mock = False
             self.connected = True
-            print(f"[deriv] Connected to Deriv API (login: {result.get('authorize', {}).get('loginid', '?')})")
+            print(f"[deriv] Connected (login: {result.get('authorize', {}).get('loginid', '?')})")
             self._listener_task = asyncio.create_task(self._listen())
         except Exception as e:
-            print(f"[deriv] Connection failed: {e} — using mock")
+            print(f"[deriv] Connection failed: {e} — mock mode")
             await self._mock_connect()
 
     async def _mock_connect(self):
-        """Fallback to mock when no token or connection fails."""
-        import random as rnd
+        self._use_mock = True
         self.connected = True
-        self._mock = True
-        print("[deriv] Running in mock mode — no real positions will be shown")
 
     async def _send(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Send a request and wait for response."""
         req_id = self._req_id
         self._req_id += 1
         payload["req_id"] = req_id
@@ -76,22 +74,17 @@ class RealDerivBroker:
         return await asyncio.wait_for(future, timeout=30)
 
     async def _listen(self):
-        """Background listener for incoming messages."""
         try:
             async for raw in self._ws:
                 msg = json.loads(raw)
                 req_id = msg.get("req_id")
                 if req_id and req_id in self._pending:
-                    future = self._pending.pop(req_id)
-                    if "error" in msg:
-                        future.set_exception(Exception(f"{msg['error']['code']}: {msg['error']['message']}"))
-                    else:
-                        future.set_result(msg)
+                    self._pending.pop(req_id).set_result(msg)
         except Exception as e:
             print(f"[deriv] Listener error: {e}")
 
     async def get_accounts(self) -> List[Dict[str, Any]]:
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return self._mock_accounts()
         try:
             res = await self._send({"balance": 1, "account": "current"})
@@ -100,7 +93,7 @@ class RealDerivBroker:
                 "broker": "deriv.com",
                 "account_id": bal.get("loginid", "?"),
                 "balance": bal.get("balance", 0),
-                "equity": bal.get("balance", 0),  # equity not in balance response
+                "equity": bal.get("balance", 0),
                 "currency": bal.get("currency", "USD"),
                 "leverage": 100,
                 "margin": 0,
@@ -114,7 +107,7 @@ class RealDerivBroker:
             return self._mock_accounts()
 
     async def get_positions(self) -> List[Dict[str, Any]]:
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return self._mock_positions()
         try:
             res = await self._send({"portfolio": 1})
@@ -136,7 +129,7 @@ class RealDerivBroker:
             return self._mock_positions()
 
     async def get_watchlist(self) -> List[Dict[str, Any]]:
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return self._mock_watchlist()
         try:
             res = await self._send({"active_symbols": "brief", "product_type": "basic"})
@@ -165,53 +158,40 @@ class RealDerivBroker:
             return self._mock_watchlist()
 
     async def get_ohlcv(self, pair: str, timeframe: str = "M5", count: int = 100):
-        """Get OHLCV candles for a pair."""
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return self._mock_ohlcv(pair, count)
-
-        granularity_map = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
-                          "H1": 3600, "H4": 14400, "D1": 86400}
+        granularity_map = {
+            "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+            "H1": 3600, "H4": 14400, "D1": 86400
+        }
         granularity = granularity_map.get(timeframe, 300)
         end_epoch = int(time.time())
         start_epoch = end_epoch - granularity * count
-
         try:
             res = await self._send({
-                "ticks_history": pair,
-                "adjust_start_time": 1,
-                "count": count,
-                "end": "latest",
-                "start": start_epoch,
-                "style": "candles",
-                "granularity": granularity,
+                "ticks_history": pair, "adjust_start_time": 1, "count": count,
+                "end": "latest", "start": start_epoch, "style": "candles", "granularity": granularity,
             })
             candles = res.get("candles", [])
-            return [{"timestamp": c["epoch"] * 1000,
-                     "open": c["open"], "high": c["high"],
-                     "low": c["low"], "close": c["close"],
-                     "volume": 0} for c in candles]
+            return [
+                {"timestamp": c["epoch"] * 1000, "open": c["open"], "high": c["high"],
+                 "low": c["low"], "close": c["close"], "volume": 0}
+                for c in candles
+            ]
         except Exception as e:
             print(f"[deriv] get_ohlcv error: {e}")
             return self._mock_ohlcv(pair, count)
 
-    # ── Trading ────────────────────────────────────────────────────────────────
     async def get_proposal(self, symbol: str, contract_type: str,
                            amount: float, multiplier: int = 100) -> Dict[str, Any]:
-        """Get a price proposal before placing a trade."""
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return {"error": "Mock mode — cannot price contracts"}
-
         payload = {
-            "proposal": 1,
-            "amount": amount,
-            "basis": "stake",
-            "contract_type": contract_type,
-            "currency": "USD",
-            "symbol": symbol,
+            "proposal": 1, "amount": amount, "basis": "stake",
+            "contract_type": contract_type, "currency": "USD", "symbol": symbol,
         }
         if contract_type in ("MULTUP", "MULTDOWN"):
             payload["multiplier"] = multiplier
-
         try:
             res = await self._send(payload)
             p = res.get("proposal", {})
@@ -229,16 +209,11 @@ class RealDerivBroker:
     async def place_trade(self, symbol: str, contract_type: str,
                           amount: float, multiplier: int = 100,
                           stop_loss: float = 0, take_profit: float = 0) -> Dict[str, Any]:
-        """Place a trade contract."""
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return {"error": "Mock mode — cannot place trades"}
-
-        # 1. Get proposal
         proposal = await self.get_proposal(symbol, contract_type, amount, multiplier)
         if "error" in proposal or not proposal.get("proposal_id"):
             return {"error": f"Failed to get proposal: {proposal}"}
-
-        # 2. Buy
         buy_payload = {"buy": proposal["proposal_id"], "price": proposal["ask_price"]}
         if stop_loss or take_profit:
             buy_payload["limit_order"] = {}
@@ -246,39 +221,34 @@ class RealDerivBroker:
                 buy_payload["limit_order"]["stop_loss"] = stop_loss
             if take_profit:
                 buy_payload["limit_order"]["take_profit"] = take_profit
-
         try:
             buy_res = await self._send(buy_payload)
             b = buy_res.get("buy", {})
             return {
-                "status": "OPEN",
-                "contract_id": b.get("contract_id"),
-                "symbol": symbol,
-                "contract_type": contract_type,
-                "buy_price": b.get("buy_price"),
-                "start_time": b.get("start_time"),
-                "spot_entry": b.get("spot"),
-                "multiplier": b.get("multiplier"),
-                "stop_loss": stop_loss or None,
-                "take_profit": take_profit or None,
+                "status": "OPEN", "contract_id": b.get("contract_id"),
+                "symbol": symbol, "contract_type": contract_type,
+                "buy_price": b.get("buy_price"), "start_time": b.get("start_time"),
+                "spot_entry": b.get("spot"), "multiplier": b.get("multiplier"),
+                "stop_loss": stop_loss or None, "take_profit": take_profit or None,
                 "transaction_id": b.get("transaction_id"),
             }
         except Exception as e:
             return {"error": str(e)}
 
     async def close_position(self, contract_id: int) -> Dict[str, Any]:
-        """Close an open position."""
-        if getattr(self, '_mock', False):
+        if self._use_mock:
             return {"error": "Mock mode — cannot close positions"}
-
         try:
-            contract_res = await self._send({"proposal_open_contract": 1, "contract_id": contract_id})
+            contract_res = await self._send({
+                "proposal_open_contract": 1, "contract_id": contract_id
+            })
             contract = contract_res.get("proposal_open_contract", {})
             if contract.get("is_sold"):
                 return {"status": "ALREADY_CLOSED", "contract_id": contract_id,
                         "sell_price": contract.get("sell_price"), "profit": contract.get("profit")}
-
-            sell_res = await self._send({"sell": contract_id, "price": contract.get("bid_price", 0)})
+            sell_res = await self._send({
+                "sell": contract_id, "price": contract.get("bid_price", 0)
+            })
             s = sell_res.get("sell", {})
             return {
                 "status": "CLOSED", "contract_id": contract_id,
@@ -289,7 +259,6 @@ class RealDerivBroker:
         except Exception as e:
             return {"error": str(e)}
 
-    # ── Mock helpers ─────────────────────────────────────────────────────────
     @staticmethod
     def _mock_accounts():
         return [{

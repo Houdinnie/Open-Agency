@@ -17,7 +17,7 @@ export const getSignals = (count = 10) => http.get('/signals/daily', { params: {
 export const getStrategies = () => http.get('/signals/strategies')
 export const runBacktest = (data: object) => http.post('/backtest/run', data)
 
-// Trading (deriv.com real execution)
+// Trading (deriv.com real execution via WebSocket)
 export const getCandles = (symbol: string, timeframe = 'M5', count = 100) =>
   http.get(`/trading/candles/${symbol}`, { params: { timeframe, count } })
 export const getProposal = (data: object) => http.post('/trading/proposal', data)

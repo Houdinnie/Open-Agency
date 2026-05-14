@@ -4,7 +4,7 @@ Combines data from both brokers into a single dashboard view.
 """
 
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from app.services.brokers.exness import ExnessBroker
 from app.services.brokers.deriv import DerivBroker
 
@@ -55,27 +55,22 @@ class BrokerManager:
             result = await self.deriv.get_ohlcv(pair.replace("/", ""), timeframe, count)
         return result
 
-    # ── Trading ────────────────────────────────────────────────────────────────
     async def get_proposal(self, symbol: str, contract_type: str,
                             amount: float, multiplier: int = 100) -> Dict[str, Any]:
-        """Price a contract before buying (deriv.com only)."""
         return await self.deriv.get_proposal(symbol, contract_type, amount, multiplier)
 
     async def place_trade(self, symbol: str, contract_type: str,
                           amount: float, multiplier: int = 100,
                           stop_loss: float = 0, take_profit: float = 0) -> Dict[str, Any]:
-        """Place a trade (deriv.com only)."""
         return await self.deriv.place_trade(
             symbol, contract_type, amount, multiplier, stop_loss, take_profit
         )
 
     async def close_trade(self, contract_id: int) -> Dict[str, Any]:
-        """Close an open position by contract ID (deriv.com only)."""
         return await self.deriv.close_position(contract_id)
 
     async def get_candles(self, symbol: str, timeframe: str = "M5",
                           count: int = 100) -> Dict[str, Any]:
-        """Get OHLC candles + structure summary for a symbol."""
         return await self.deriv.get_ohlcv(symbol.replace("/", ""), timeframe, count)
 
     async def close_all(self):
